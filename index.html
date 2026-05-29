@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Juego de Carreras 2D - Obstáculos Destructibles</title>
+    <style>
+        body {
+            margin: 0; padding: 0; background-color: #222;
+            overflow: hidden; touch-action: none;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #game-container {
+            position: relative; width: 100vw; height: 100vh;
+            max-width: 600px; margin: 0 auto; background-color: #333;
+        }
+        canvas { display: block; width: 100%; height: 100%; }
+        
+        #btn-pause {
+            position: absolute; top: 20px; left: 20px;
+            background: rgba(255, 255, 255, 0.2); border: 2px solid white;
+            color: white; border-radius: 8px; padding: 10px 15px;
+            font-size: 16px; font-weight: bold; cursor: pointer; z-index: 20;
+        }
+        #btn-pause:active { background: rgba(255, 255, 255, 0.5); }
+        
+        #ui-board {
+            position: absolute; top: 20px; right: 20px;
+            text-align: right; color: #fff; text-shadow: 2px 2px 4px #000;
+            font-size: 24px; font-weight: bold; z-index: 10;
+        }
+        #posicion-text { font-size: 18px; color: #ffd700; }
+        
+        .overlay-text {
+            position: absolute; top: 40%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: white; text-align: center;
+            text-shadow: 3px 3px 10px #000; z-index: 30;
+        }
+        #countdown-overlay { font-size: 80px; color: #ffd700; font-weight: bold; }
+        #pause-overlay {
+            font-size: 60px; background: rgba(0,0,0,0.8);
+            padding: 20px 40px; border-radius: 15px; display: none;
+        }
+        
+        #mensaje-final {
+            font-size: 30px; background: rgba(0,0,0,0.9);
+            padding: 30px; border-radius: 15px; display: none;
+            border: 2px solid white;
+            width: 80%; max-width: 400px;
+            text-align: center;
+        }
+        #btn-restart {
+            margin-top: 25px; padding: 12px 25px;
+            font-size: 20px; font-weight: bold; color: #333;
+            background-color: #ffd700; border: none;
+            border-radius: 10px; cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            display: none; width: 100%;
+        }
+        #btn-restart:active { background-color: #ffc107; transform: scale(0.98); }
+
+        #controls {
+            position: absolute; bottom: 20px; width: 100%;
+            display: flex; justify-content: space-between;
+            padding: 0 20px; box-sizing: border-box; z-index: 10;
+        }
+        .btn-group { display: flex; gap: 10px; }
+        .btn {
+            background: rgba(255, 255, 255, 0.2); border: 2px solid white;
+            color: white; border-radius: 50%; width: 60px; height: 60px;
+            font-size: 24px; display: flex; justify-content: center;
+            align-items: center; user-select: none; cursor: pointer;
+        }
+        .btn:active { background: rgba(255, 255, 255, 0.5); }
+        #btn-gas {
+            width: 90px; height: 70px; border-radius: 10px;
+            background: rgba(0, 200, 0, 0.4); font-size: 16px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div id="btn-pause">⏸️ Pausa (E)</div>
+    
+    <div id="ui-board">
+        <div id="vueltas-text">Vueltas: 0 / 5</div>
+        <div id="posicion-text">Lugar: 8º</div>
+    </div>
+    
+    <div id="countdown-overlay" class="overlay-text">5</div>
+    <div id="pause-overlay" class="overlay-text">PAUSA</div>
+    
+    <div id="mensaje-final" class="overlay-text">
+        <div id="mensaje-texto"></div>
+        <button id="btn-restart">🔄 Jugar de nuevo</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="controls">
+        <div class="btn-group">
+            <div class="btn" id="btn-left">◀<br>A</div>
+            <div class="btn" id="btn-right">▶<br>D</div>
+        </div>
+        <div class="btn" id="btn-gas">Acelerar<br>(W)</div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    canvas.width = window.innerWidth > 600 ? 600 : window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    const trackWidth = canvas.width;
+    const laneCount = 4;
+    const laneWidth = trackWidth / laneCount;
+    
+    const totalLaps = 5;
+    const lapDistance = 10000; 
+
+    let gameState = 'COUNTDOWN'; 
+    let countdownStart = Date.now();
+    let isAccelerating = false;
+
+    const rowSpacing = 85; 
+
+    // Jugador ahora es MÁS RÁPIDO (Velocidad 17)
+    const player = {
+        lane: 1, 
+        yOffset: canvas.height - 350, 
+        distance: 0, speed: 0, maxSpeed: 17, 
+        width: 40, height: 70, lap: 0, slowTimer: 0
+    };
+
+    // Bots se mantienen en velocidad 16
+    const botColors = ['#ff3333', '#33ff33', '#3333ff', '#ffff33', '#ff33ff', '#33ffff', '#ff8800'];
+    const bots = [
+        { id: 1, lane: 2, distance: 0,               baseSpeed: 16, speed: 0, width: 40, height: 70, color: botColors[0], slowTimer: 0, aiCooldown: 0, lap: 0 },
+        { id: 2, lane: 1, distance: -rowSpacing,     baseSpeed: 16, speed: 0, width: 40, height: 70, color: botColors[1], slowTimer: 0, aiCooldown: 0, lap: 0 },
+        { id: 3, lane: 2, distance: -rowSpacing,     baseSpeed: 16, speed: 0, width: 40, height: 70, color: botColors[2], slowTimer: 0, aiCooldown: 0, lap: 0 },
+        { id: 4, lane: 1, distance: -rowSpacing * 2, baseSpeed: 16, speed: 0, width: 40, height: 70, color: botColors[3], slowTimer: 0, aiCooldown: 0, lap: 0 },
+        { id: 5, lane: 2, distance: -rowSpacing * 2, baseSpeed: 16, speed: 0, width: 40, height: 70, color: botColors[4], slowTimer: 0, aiCooldown: 0, lap: 0 },
+        { id: 6, lane: 1, distance: -rowSpacing * 3, baseSpeed: 16, speed: 0, width: 40, height: 70, color: botColors[5], slowTimer: 0, aiCooldown: 0, lap: 0 },
+        { id: 7, lane: 2, distance: -rowSpacing * 3, baseSpeed: 16, speed: 0, width: 40, height: 70, color: botColors[6], slowTimer: 0, aiCooldown: 0, lap: 0 }
+    ];
+
+    let obstacles = [];
+
+    // --- BOTÓN DE REINICIO ---
+    document.getElementById('btn-restart').addEventListener('click', () => location.reload());
+    document.getElementById('btn-restart').addEventListener('touchstart', (e) => { e.preventDefault(); location.reload(); });
+
+    // --- CONTROLES Y PAUSA ---
+    function togglePause() {
+        if (gameState === 'PLAYING') {
+            gameState = 'PAUSED';
+            document.getElementById('pause-overlay').style.display = 'block';
+        } else if (gameState === 'PAUSED') {
+            gameState = 'PLAYING';
+            document.getElementById('pause-overlay').style.display = 'none';
+        }
+    }
+
+    document.getElementById('btn-pause').addEventListener('click', togglePause);
+    document.getElementById('btn-pause').addEventListener('touchstart', (e) => { e.preventDefault(); togglePause(); });
+
+    const moveLeft = () => { if (player.lane > 0 && gameState === 'PLAYING') player.lane--; };
+    const moveRight = () => { if (player.lane < laneCount - 1 && gameState === 'PLAYING') player.lane++; };
+    
+    document.getElementById('btn-left').addEventListener('mousedown', moveLeft);
+    document.getElementById('btn-left').addEventListener('touchstart', (e) => { e.preventDefault(); moveLeft(); });
+    
+    document.getElementById('btn-right').addEventListener('mousedown', moveRight);
+    document.getElementById('btn-right').addEventListener('touchstart', (e) => { e.preventDefault(); moveRight(); });
+
+    const startGas = (e) => { e.preventDefault(); isAccelerating = true; };
+    const stopGas = (e) => { e.preventDefault(); isAccelerating = false; };
+    
+    const btnGas = document.getElementById('btn-gas');
+    btnGas.addEventListener('mousedown', startGas);
+    btnGas.addEventListener('mouseup', stopGas);
+    btnGas.addEventListener('mouseleave', stopGas);
+    btnGas.addEventListener('touchstart', startGas);
+    btnGas.addEventListener('touchend', stopGas);
+
+    window.addEventListener('keydown', (e) => {
+        const key = e.key.toLowerCase();
+        if (key === 'e') togglePause();
+        if (gameState !== 'PLAYING') return;
+        if (key === 'a') moveLeft();
+        if (key === 'd') moveRight();
+        if (key === 'w') isAccelerating = true;
+    });
+
+    window.addEventListener('keyup', (e) => {
+        if (e.key.toLowerCase() === 'w') isAccelerating = false;
+    });
+
+    // --- GENERADOR DE OBSTÁCULOS MEJORADO ---
+    function spawnObstacle() {
+        if (gameState !== 'PLAYING') return;
+        let maxDist = player.distance;
+        bots.forEach(b => { if (b.distance > maxDist) maxDist = b.distance; });
+        
+        // 60% de probabilidad de spawnear 2 obstáculos a la vez en carriles distintos
+        let numObs = Math.random() > 0.4 ? 2 : 1; 
+        let usedLanes = [];
+
+        for(let i = 0; i < numObs; i++) {
+            let lane = Math.floor(Math.random() * laneCount);
+            if(!usedLanes.includes(lane)) {
+                usedLanes.push(lane);
+                obstacles.push({
+                    lane: lane,
+                    // Dispersión variada para que no aparezcan exactamente en línea
+                    distance: maxDist + canvas.height + 400 + (Math.random() * 500),
+                    width: 35, height: 35,
+                    active: true // Añadimos propiedad para saber si fue destruido
+                });
+            }
+        }
+    }
+    setInterval(spawnObstacle, 1000); 
+
+    // --- LÓGICA PRINCIPAL ---
+    function update() {
+        if (gameState === 'PAUSED' || gameState === 'GAMEOVER') return;
+
+        if (gameState === 'COUNTDOWN') {
+            let elapsed = Math.floor((Date.now() - countdownStart) / 1000);
+            let countdownValue = 5 - elapsed;
+            const overlay = document.getElementById('countdown-overlay');
+            
+            if (countdownValue > 0) {
+                overlay.innerText = countdownValue;
+            } else if (countdownValue === 0) {
+                overlay.innerText = "¡YA!";
+            } else {
+                overlay.style.display = 'none';
+                gameState = 'PLAYING';
+            }
+            return;
+        }
+
+        const targetYOffset = canvas.height - 150;
+        if (player.yOffset < targetYOffset) player.yOffset += 2;
+
+        let limiteVelocidad = Date.now() < player.slowTimer ? 5 : player.maxSpeed;
+
+        if (isAccelerating) {
+            player.speed += 0.25;
+            if (player.speed > limiteVelocidad) player.speed = limiteVelocidad;
+        } else {
+            player.speed -= 0.15;
+            if (player.speed < 0) player.speed = 0;
+        }
+
+        if (Date.now() < player.slowTimer && player.speed > limiteVelocidad) player.speed = limiteVelocidad;
+
+        player.distance += player.speed;
+        player.lap = Math.floor(player.distance / lapDistance);
+
+        bots.forEach(bot => {
+            let botLimiteVelocidad = Date.now() < bot.slowTimer ? 5 : bot.baseSpeed;
+
+            if (bot.speed < botLimiteVelocidad) bot.speed += 0.2;
+            if (bot.speed > botLimiteVelocidad) bot.speed = botLimiteVelocidad;
+
+            bot.distance += bot.speed;
+            bot.lap = Math.floor(bot.distance / lapDistance);
+
+            if (Date.now() > bot.aiCooldown) {
+                // El bot escanea si hay un obstáculo ACTIVO adelante
+                const obsAdelante = obstacles.find(obs => obs.active && obs.lane === bot.lane && obs.distance > bot.distance && obs.distance < bot.distance + 500);
+                
+                if (obsAdelante) {
+                    bot.aiCooldown = Date.now() + 800; 
+                    
+                    if (Math.random() > 0.50) {
+                        let puedeIzquierda = bot.lane > 0;
+                        let puedeDerecha = bot.lane < laneCount - 1;
+
+                        if (puedeIzquierda && puedeDerecha) {
+                            bot.lane += Math.random() > 0.5 ? 1 : -1;
+                        } else if (puedeIzquierda) {
+                            bot.lane--;
+                        } else if (puedeDerecha) {
+                            bot.lane++;
+                        }
+                    }
+                }
+            }
+        });
+
+        bots.forEach(bot => {
+            if (bot.lane === player.lane) {
+                const distDiff = Math.abs(bot.distance - player.distance);
+                if (distDiff < player.height - 8) {
+                    if (player.distance < bot.distance) player.speed = 3; 
+                }
+            }
+        });
+
+        // --- COLISIONES CON OBSTÁCULOS (AHORA DESTRUCTIBLES) ---
+        obstacles.forEach(obs => {
+            if (!obs.active) return; // Si ya se rompió, lo ignoramos
+
+            // Colisión con el Jugador
+            if (obs.lane === player.lane && Math.abs(obs.distance - player.distance) < 25) {
+                if (Date.now() > player.slowTimer) player.slowTimer = Date.now() + 1500; // Penalización
+                obs.active = false; // El obstáculo se rompe
+            }
+            
+            // Colisión con los Bots
+            bots.forEach(bot => {
+                if (obs.active && obs.lane === bot.lane && Math.abs(obs.distance - bot.distance) < 25) {
+                    if (Date.now() > bot.slowTimer) bot.slowTimer = Date.now() + 1500;
+                    obs.active = false; // El obstáculo se rompe
+                }
+            });
+        });
+
+        // Limpiamos los obstáculos que quedaron atrás y los que fueron destruidos
+        obstacles = obstacles.filter(obs => obs.distance > player.distance - canvas.height && obs.active);
+
+        actualizarUI();
+        verificarVictoria();
+    }
+
+    function actualizarUI() {
+        let posicion = 1;
+        bots.forEach(bot => { if (bot.distance > player.distance) posicion++; });
+
+        document.getElementById('vueltas-text').innerText = `Vueltas: ${player.lap} / ${totalLaps}`;
+        document.getElementById('posicion-text').innerText = `Lugar: ${posicion}º`;
+    }
+
+    function verificarVictoria() {
+        let alguienTermino = false;
+        let ganador = "Nadie";
+        let miPosicion = 1;
+
+        bots.forEach(bot => { 
+            if (bot.distance > player.distance) miPosicion++; 
+            if (bot.lap >= totalLaps) {
+                alguienTermino = true;
+                ganador = "Bot";
+            }
+        });
+
+        if (player.lap >= totalLaps) {
+            alguienTermino = true;
+            ganador = "Jugador";
+        }
+
+        if (alguienTermino) {
+            gameState = 'GAMEOVER';
+            const msg = document.getElementById('mensaje-final');
+            const msgText = document.getElementById('mensaje-texto');
+            const btnRestart = document.getElementById('btn-restart');
+            
+            msg.style.display = 'block';
+            btnRestart.style.display = 'inline-block';
+
+            if (ganador === "Jugador" && miPosicion === 1) {
+                msgText.innerHTML = '🏁 ¡BANDERA A CUADROS! 🏁<br><br><span style="color:#00ff00; font-size:40px;">¡ERES EL CAMPEÓN!</span><br>Llegaste en 1º Lugar.';
+            } else {
+                msgText.innerHTML = `🏁 CARRERA TERMINADA 🏁<br><br><span style="color:#ff3333; font-size:30px;">Derrota...</span><br>Quedaste en la posición: ${miPosicion}º`;
+            }
+        }
+    }
+
+    function draw() {
+        ctx.fillStyle = '#3a3a3a';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = '#ffffff';
+        const lineOffset = (gameState === 'COUNTDOWN' || gameState === 'PAUSED' || gameState === 'GAMEOVER') ? 0 : (player.distance % 40);
+        for (let i = 1; i < laneCount; i++) {
+            const x = i * laneWidth;
+            for (let y = -40; y < canvas.height; y += 40) {
+                if ((y + lineOffset) % 80 < 40) {
+                    ctx.fillRect(x - 2, y + lineOffset, 4, 20);
+                }
+            }
+        }
+
+        const pianoCondition = (gameState === 'COUNTDOWN' || gameState === 'PAUSED' || gameState === 'GAMEOVER') ? true : (player.distance % 100 < 50);
+        ctx.fillStyle = pianoCondition ? '#e63946' : '#ffffff';
+        ctx.fillRect(0, 0, 12, canvas.height);
+        ctx.fillRect(canvas.width - 12, 0, 12, canvas.height);
+
+        const proxVueltaDist = (player.lap + 1) * lapDistance;
+        const distParaMeta = proxVueltaDist - player.distance;
+        
+        if (distParaMeta < canvas.height && distParaMeta > -100) {
+            const finishLineY = player.yOffset - distParaMeta;
+            ctx.fillStyle = '#aaaaaa';
+            ctx.fillRect(12, finishLineY, canvas.width - 24, 20);
+            ctx.fillStyle = '#ffffff';
+            for (let x = 12; x < canvas.width - 24; x += 20) {
+                if (Math.floor(x / 20) % 2 === 0) ctx.fillRect(x, finishLineY, 10, 10);
+                else ctx.fillRect(x, finishLineY + 10, 10, 10);
+            }
+        }
+
+        const lineaSalidaY = player.yOffset - 30 + (0 - player.distance);
+        if (lineaSalidaY > -50 && lineaSalidaY < canvas.height + 100) {
+            ctx.fillStyle = '#aaaaaa';
+            ctx.fillRect(12, lineaSalidaY, canvas.width - 24, 20);
+            ctx.fillStyle = '#ffffff';
+            for (let x = 12; x < canvas.width - 24; x += 20) {
+                if (Math.floor(x / 20) % 2 === 0) ctx.fillRect(x, lineaSalidaY, 10, 10);
+                else ctx.fillRect(x, lineaSalidaY + 10, 10, 10);
+            }
+        }
+
+        // Solo dibujar obstáculos activos
+        obstacles.forEach(obs => {
+            if (!obs.active) return;
+            const drawY = player.yOffset - (obs.distance - player.distance);
+            if (drawY > -100 && drawY < canvas.height + 100) {
+                const x = obs.lane * laneWidth + (laneWidth / 2) - (obs.width / 2);
+                ctx.fillStyle = '#ff7b00';
+                ctx.fillRect(x, drawY, obs.width, obs.height);
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(x + 5, drawY + 10, obs.width - 10, 10);
+                ctx.font = '16px sans-serif';
+                ctx.fillText('🚧', x + 4, drawY + 24);
+            }
+        });
+
+        bots.forEach(bot => {
+            const drawY = player.yOffset - (bot.distance - player.distance);
+            if (drawY > -200 && drawY < canvas.height + 300) {
+                const x = bot.lane * laneWidth + (laneWidth / 2) - (bot.width / 2);
+                if (Date.now() < bot.slowTimer && Math.floor(Date.now() / 100) % 2 === 0) ctx.globalAlpha = 0.4;
+                
+                ctx.fillStyle = bot.color;
+                ctx.fillRect(x, drawY, bot.width, bot.height);
+                ctx.fillStyle = '#222';
+                ctx.fillRect(x + 4, drawY + 15, bot.width - 8, 12);
+                ctx.font = '20px sans-serif';
+                ctx.fillText('🚗', x + 5, drawY + 42);
+                ctx.globalAlpha = 1.0;
+            }
+        });
+
+        const px = player.lane * laneWidth + (laneWidth / 2) - (player.width / 2);
+        if (Date.now() < player.slowTimer && Math.floor(Date.now() / 100) % 2 === 0) ctx.globalAlpha = 0.4;
+        
+        ctx.fillStyle = '#00f5d4'; 
+        ctx.fillRect(px, player.yOffset, player.width, player.height);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(px + 4, player.yOffset + 15, player.width - 8, 12);
+        ctx.font = '20px sans-serif';
+        ctx.fillText('🏎️', px + 5, player.yOffset + 42);
+        ctx.globalAlpha = 1.0;
+    }
+
+    function gameLoop() {
+        update();
+        draw();
+        requestAnimationFrame(gameLoop);
+    }
+
+    gameLoop();
+</script>
+</body>
+</html>
